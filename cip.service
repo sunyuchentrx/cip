@@ -13,6 +13,7 @@ EnvironmentFile=-/etc/cip/cip.env
 ExecStart=/root/ssh_monitor.sh
 ExecReload=/bin/kill -HUP $MAINPID
 Restart=on-failure
+RestartPreventExitStatus=2
 RestartSec=10
 StandardOutput=journal
 StandardError=journal

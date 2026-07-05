@@ -231,21 +231,21 @@ check_config() {
     local errors=()
     local error
 
-    [[ -z "${TARGET_PORT:-}" ]] && errors+=("TARGET_PORT is empty")
-    [[ -z "${CHECK_API_URL:-}" ]] && errors+=("CHECK_API_URL is empty")
-    [[ -z "${CHECK_API_URL_2:-}" ]] && errors+=("CHECK_API_URL_2 is empty")
-    [[ -z "${SWITCH_IP_URL:-}" ]] && errors+=("SWITCH_IP_URL is empty")
-    [[ "$CHECK_INTERVAL" =~ ^[0-9]+$ ]] || errors+=("CHECK_INTERVAL must be a number")
-    [[ "$MAX_FAILURES" =~ ^[0-9]+$ ]] || errors+=("MAX_FAILURES must be a number")
-    [[ "$SWITCH_WAIT_SECONDS" =~ ^[0-9]+$ ]] || errors+=("SWITCH_WAIT_SECONDS must be a number")
-    [[ "$SWITCH_COOLDOWN_SECONDS" =~ ^[0-9]+$ ]] || errors+=("SWITCH_COOLDOWN_SECONDS must be a number")
+    [[ -z "${TARGET_PORT:-}" ]] && errors+=("TARGET_PORT 未配置")
+    [[ -z "${CHECK_API_URL:-}" ]] && errors+=("CHECK_API_URL 未配置")
+    [[ -z "${CHECK_API_URL_2:-}" ]] && errors+=("CHECK_API_URL_2 未配置")
+    [[ -z "${SWITCH_IP_URL:-}" ]] && errors+=("SWITCH_IP_URL 未配置")
+    [[ "$CHECK_INTERVAL" =~ ^[0-9]+$ ]] || errors+=("CHECK_INTERVAL 必须是数字")
+    [[ "$MAX_FAILURES" =~ ^[0-9]+$ ]] || errors+=("MAX_FAILURES 必须是数字")
+    [[ "$SWITCH_WAIT_SECONDS" =~ ^[0-9]+$ ]] || errors+=("SWITCH_WAIT_SECONDS 必须是数字")
+    [[ "$SWITCH_COOLDOWN_SECONDS" =~ ^[0-9]+$ ]] || errors+=("SWITCH_COOLDOWN_SECONDS 必须是数字")
 
     if ! refresh_target_address; then
-        errors+=("failed to determine target address")
+        errors+=("无法获取目标公网 IP")
     fi
 
     if (( ${#errors[@]} > 0 )); then
-        log "Configuration errors:"
+        log "配置错误："
         for error in "${errors[@]}"; do
             log "  - $error"
         done
@@ -264,8 +264,8 @@ check_dependencies() {
     done
 
     if (( ${#missing[@]} > 0 )); then
-        log "Missing dependencies: ${missing[*]}"
-        log "Install example: apt-get update && apt-get install -y curl coreutils sed"
+        log "缺少依赖：${missing[*]}"
+        log "安装示例：apt-get update && apt-get install -y curl coreutils sed"
         return 1
     fi
 
@@ -326,11 +326,11 @@ main() {
     log "=== CIP monitor starting ==="
 
     if ! check_dependencies; then
-        exit 1
+        exit 2
     fi
 
     if ! check_config; then
-        exit 1
+        exit 2
     fi
 
     trap cleanup SIGINT SIGTERM

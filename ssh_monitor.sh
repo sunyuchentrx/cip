@@ -75,6 +75,27 @@ device_label() {
     fi
 }
 
+notify_status() {
+    local status="$1"
+    local extra="${2:-}"
+    local target="${CURRENT_ADDRESS:-unknown}:${TARGET_PORT:-unknown}"
+    local message
+
+    message="状态：${status}
+设备：$(device_label)
+目标：${target}"
+
+    if [[ -n "$extra" ]]; then
+        message="${message}
+${extra}"
+    fi
+
+    message="${message}
+时间：$(date '+%Y-%m-%d %H:%M:%S')"
+
+    send_telegram "$message"
+}
+
 get_current_ip() {
     local services=(
         "https://api.ipify.org"
@@ -249,6 +270,8 @@ check_config() {
         for error in "${errors[@]}"; do
             log "  - $error"
         done
+        notify_status "启动失败" "原因：配置错误
+详情：${errors[*]}"
         return 1
     fi
 
@@ -274,21 +297,14 @@ check_dependencies() {
 
 cleanup() {
     log "Stopping monitor"
-    send_telegram "状态：监控服务已停止
-设备：$(device_label)
-目标：${CURRENT_ADDRESS:-unknown}:${TARGET_PORT:-unknown}
-时间：$(date '+%Y-%m-%d %H:%M:%S')"
+    notify_status "监控服务已停止"
     exit 0
 }
 
 main_loop() {
     log "Monitoring ${CURRENT_ADDRESS}:${TARGET_PORT} via ${CHECK_API_URL} and ${CHECK_API_URL_2}"
-    send_telegram "状态：监控服务已启动
-设备：$(device_label)
-目标：${CURRENT_ADDRESS}:${TARGET_PORT}
-检测间隔：${CHECK_INTERVAL} 秒
-失败阈值：${MAX_FAILURES} 次
-时间：$(date '+%Y-%m-%d %H:%M:%S')"
+    notify_status "监控服务启动完成" "检测间隔：${CHECK_INTERVAL} 秒
+失败阈值：${MAX_FAILURES} 次"
 
     while true; do
         if check_port_by_api "$CURRENT_ADDRESS" "$TARGET_PORT"; then
@@ -324,8 +340,10 @@ main_loop() {
 
 main() {
     log "=== CIP monitor starting ==="
+    notify_status "监控服务正在启动"
 
     if ! check_dependencies; then
+        notify_status "启动失败" "原因：缺少依赖"
         exit 2
     fi
 

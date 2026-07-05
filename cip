@@ -1,0 +1,161 @@
+#!/usr/bin/env bash
+
+set -u
+
+SERVICE_NAME="${SERVICE_NAME:-cip}"
+SERVICE_FILE="${SERVICE_FILE:-/etc/systemd/system/cip.service}"
+SCRIPT_PATH="${SCRIPT_PATH:-/root/ssh_monitor.sh}"
+CONFIG_FILE="${CONFIG_FILE:-/etc/cip/cip.env}"
+
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+CYAN='\033[0;36m'
+NC='\033[0m'
+
+log() {
+    printf '[%s] %b\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$*"
+}
+
+pause() {
+    printf '%b' "${YELLOW}Press any key to return to menu...${NC}"
+    read -r -n 1
+    printf '\n'
+}
+
+require_root() {
+    if [[ ${EUID:-$(id -u)} -ne 0 ]]; then
+        printf '%b\n' "${RED}Error: run as root, for example: sudo $0${NC}"
+        exit 1
+    fi
+}
+
+service_active_text() {
+    if systemctl is-active --quiet "$SERVICE_NAME"; then
+        printf '%b' "${GREEN}running${NC}"
+    else
+        printf '%b' "${RED}stopped${NC}"
+    fi
+}
+
+service_enabled_text() {
+    if systemctl is-enabled --quiet "$SERVICE_NAME" 2>/dev/null; then
+        printf '%b' "${GREEN}enabled${NC}"
+    else
+        printf '%b' "${YELLOW}disabled${NC}"
+    fi
+}
+
+show_header() {
+    clear
+    printf '%b\n' "${CYAN}================================================${NC}"
+    printf '%b\n' "${CYAN}              CIP Service Manager${NC}"
+    printf '%b\n' "${CYAN}================================================${NC}"
+    printf '\n'
+}
+
+show_status() {
+    printf '%b\n' "${BLUE}Service status${NC}"
+    printf '  Service: %s\n' "$SERVICE_NAME"
+    printf '  Active: '
+    service_active_text
+    printf '\n'
+    printf '  Boot: '
+    service_enabled_text
+    printf '\n'
+    printf '  Script: %s\n' "$SCRIPT_PATH"
+    printf '  Service file: %s\n' "$SERVICE_FILE"
+    printf '  Config file: %s\n' "$CONFIG_FILE"
+    printf '\n'
+}
+
+show_menu() {
+    show_header
+    show_status
+    printf '%b\n' "${YELLOW}Choose an action:${NC}"
+    printf '  %b1)%b Start service\n' "$GREEN" "$NC"
+    printf '  %b2)%b Stop service\n' "$GREEN" "$NC"
+    printf '  %b3)%b Restart service\n' "$GREEN" "$NC"
+    printf '  %b4)%b Show detailed status\n' "$GREEN" "$NC"
+    printf '  %b5)%b Show logs\n' "$GREEN" "$NC"
+    printf '  %b6)%b Enable boot start\n' "$GREEN" "$NC"
+    printf '  %b7)%b Disable boot start\n' "$GREEN" "$NC"
+    printf '  %b8)%b Reload systemd\n' "$GREEN" "$NC"
+    printf '  %b9)%b Show config\n' "$GREEN" "$NC"
+    printf '  %b0)%b Exit\n' "$GREEN" "$NC"
+    printf '\n%bChoose [0-9]: %b' "$CYAN" "$NC"
+}
+
+run_systemctl() {
+    local action="$1"
+    log "${BLUE}Running: systemctl ${action} ${SERVICE_NAME}${NC}"
+
+    if systemctl "$action" "$SERVICE_NAME"; then
+        log "${GREEN}Success${NC}"
+    else
+        log "${RED}Failed${NC}"
+    fi
+
+    sleep 1
+}
+
+reload_systemd() {
+    log "${BLUE}Running: systemctl daemon-reload${NC}"
+    if systemctl daemon-reload; then
+        log "${GREEN}Reloaded${NC}"
+    else
+        log "${RED}Reload failed${NC}"
+    fi
+    sleep 1
+}
+
+show_detailed_status() {
+    systemctl status "$SERVICE_NAME" --no-pager
+    pause
+}
+
+show_logs() {
+    journalctl -u "$SERVICE_NAME" -n 100 --no-pager
+    pause
+}
+
+show_config() {
+    if [[ -f "$CONFIG_FILE" ]]; then
+        sed -E 's/(PASSWORD|TOKEN|CHAT_ID|URL)=.*/\1=***/' "$CONFIG_FILE"
+    else
+        printf 'Config file does not exist: %s\n' "$CONFIG_FILE"
+        printf 'The monitor will use defaults from %s\n' "$SCRIPT_PATH"
+    fi
+    pause
+}
+
+main() {
+    require_root
+
+    while true; do
+        show_menu
+        read -r choice
+
+        case "$choice" in
+            1) run_systemctl start ;;
+            2) run_systemctl stop ;;
+            3) run_systemctl restart ;;
+            4) show_detailed_status ;;
+            5) show_logs ;;
+            6) run_systemctl enable ;;
+            7) run_systemctl disable ;;
+            8) reload_systemd ;;
+            9) show_config ;;
+            0) exit 0 ;;
+            *)
+                log "${RED}Invalid choice${NC}"
+                sleep 1
+                ;;
+        esac
+    done
+}
+
+if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
+    main "$@"
+fi

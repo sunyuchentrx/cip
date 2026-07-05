@@ -1,0 +1,322 @@
+#!/usr/bin/env bash
+
+set -u
+
+# CIP monitor.
+# Checks the current public IP and target port through an HTTP API. If the
+# check fails several times in a row, it calls the configured IP switch URL.
+
+SCRIPT_NAME="${SCRIPT_NAME:-CIP Monitor}"
+CONFIG_FILE="${CONFIG_FILE:-/etc/cip/cip.env}"
+
+# Main settings. These can be overridden by /etc/cip/cip.env or environment.
+TARGET_ADDRESS="${TARGET_ADDRESS:-auto}"
+TARGET_PORT="${TARGET_PORT:-}"
+CHECK_API_URL="${CHECK_API_URL:-}"
+CHECK_API_URL_2="${CHECK_API_URL_2:-}"
+CHECK_INTERVAL="${CHECK_INTERVAL:-30}"
+MAX_FAILURES="${MAX_FAILURES:-3}"
+SWITCH_IP_URL="${SWITCH_IP_URL:-}"
+SWITCH_WAIT_SECONDS="${SWITCH_WAIT_SECONDS:-10}"
+SWITCH_COOLDOWN_SECONDS="${SWITCH_COOLDOWN_SECONDS:-120}"
+
+TELEGRAM_BOT_TOKEN="${TELEGRAM_BOT_TOKEN:-}"
+TELEGRAM_CHAT_ID="${TELEGRAM_CHAT_ID:-}"
+
+if [[ -f "$CONFIG_FILE" ]]; then
+    # shellcheck disable=SC1090
+    source "$CONFIG_FILE"
+fi
+
+FAILURE_COUNT=0
+LAST_SWITCH_TS=0
+CURRENT_ADDRESS=""
+
+log() {
+    printf '[%s] %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$*"
+}
+
+send_telegram() {
+    local message="$1"
+
+    if [[ -z "${TELEGRAM_BOT_TOKEN:-}" || -z "${TELEGRAM_CHAT_ID:-}" ]]; then
+        log "[TG] $message"
+        return 0
+    fi
+
+    local url="https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage"
+    local response
+
+    response=$(curl -sS --max-time 15 -X POST "$url" \
+        --data-urlencode "chat_id=${TELEGRAM_CHAT_ID}" \
+        --data-urlencode "text=${SCRIPT_NAME}
+${message}" \
+        -d "disable_web_page_preview=true" 2>&1)
+
+    if [[ $? -eq 0 ]]; then
+        log "[TG] sent: $message"
+    else
+        log "[TG] send failed: $response"
+    fi
+}
+
+get_current_ip() {
+    local services=(
+        "https://api.ipify.org"
+        "https://ipinfo.io/ip"
+        "https://icanhazip.com"
+        "http://checkip.amazonaws.com"
+    )
+    local service ip
+
+    for service in "${services[@]}"; do
+        ip=$(curl -fsS --connect-timeout 5 --max-time 10 "$service" 2>/dev/null | tr -d '\n\r[:space:]')
+        if [[ "$ip" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]]; then
+            printf '%s\n' "$ip"
+            return 0
+        fi
+    done
+
+    return 1
+}
+
+refresh_target_address() {
+    if [[ "${TARGET_ADDRESS:-auto}" != "auto" && -n "${TARGET_ADDRESS:-}" ]]; then
+        CURRENT_ADDRESS="$TARGET_ADDRESS"
+        return 0
+    fi
+
+    local ip
+    if ip=$(get_current_ip); then
+        CURRENT_ADDRESS="$ip"
+        log "Target address set to current public IP: $CURRENT_ADDRESS"
+        return 0
+    fi
+
+    log "Failed to get current public IP"
+    return 1
+}
+
+check_single_api() {
+    local api_url="$1"
+    local address="$2"
+    local port="$3"
+    local label="$4"
+    local url="${api_url}?address=${address}&port=${port}"
+    local response code returned_address returned_port
+
+    log "[CHECK][$label] API checking ${address}:${port}"
+
+    response=$(curl -fsS --connect-timeout 8 --max-time 20 "$url" 2>&1)
+    if [[ $? -ne 0 ]]; then
+        log "[CHECK][$label] API request failed: $response"
+        return 1
+    fi
+
+    code=$(printf '%s' "$response" | sed -n 's/.*"code"[[:space:]]*:[[:space:]]*\(-\{0,1\}[0-9]\+\).*/\1/p')
+    returned_address=$(printf '%s' "$response" | sed -n 's/.*"address"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')
+    returned_port=$(printf '%s' "$response" | sed -n 's/.*"port"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')
+
+    if [[ "$code" == "200" && "$returned_address" == "$address" && "$returned_port" == "$port" ]]; then
+        log "[CHECK][$label] success: ${address}:${port}"
+        return 0
+    fi
+
+    log "[CHECK][$label] failed: $response"
+    return 1
+}
+
+check_port_by_api() {
+    local address="$1"
+    local port="$2"
+    local status_file_1 status_file_2 pid_1 pid_2 status_1 status_2
+
+    status_file_1=$(mktemp)
+    status_file_2=$(mktemp)
+
+    (
+        if check_single_api "$CHECK_API_URL" "$address" "$port" "api1"; then
+            printf '0' > "$status_file_1"
+        else
+            printf '1' > "$status_file_1"
+        fi
+    ) &
+    pid_1=$!
+
+    (
+        if check_single_api "$CHECK_API_URL_2" "$address" "$port" "api2"; then
+            printf '0' > "$status_file_2"
+        else
+            printf '1' > "$status_file_2"
+        fi
+    ) &
+    pid_2=$!
+
+    wait "$pid_1"
+    wait "$pid_2"
+
+    status_1=$(cat "$status_file_1" 2>/dev/null || printf '1')
+    status_2=$(cat "$status_file_2" 2>/dev/null || printf '1')
+    rm -f "$status_file_1" "$status_file_2"
+
+    if [[ "$status_1" == "0" || "$status_2" == "0" ]]; then
+        log "[CHECK] success: at least one API confirmed ${address}:${port}"
+        return 0
+    fi
+
+    log "[CHECK] failed: both APIs failed for ${address}:${port}"
+    return 1
+}
+
+switch_ip() {
+    local now old_ip new_ip result
+    now=$(date +%s)
+
+    if (( now - LAST_SWITCH_TS < SWITCH_COOLDOWN_SECONDS )); then
+        log "Switch skipped: still in cooldown (${SWITCH_COOLDOWN_SECONDS}s)"
+        return 1
+    fi
+
+    old_ip="${CURRENT_ADDRESS:-unknown}"
+    log "Switching IP, current address: $old_ip"
+
+    result=$(curl -fsS --connect-timeout 8 --max-time 20 "$SWITCH_IP_URL" 2>&1)
+    if [[ $? -ne 0 ]]; then
+        log "IP switch request failed: $result"
+        send_telegram "IP switch failed
+Current IP: $old_ip
+Reason: request failed"
+        LAST_SWITCH_TS=$now
+        return 1
+    fi
+
+    log "IP switch request succeeded: $result"
+    sleep "$SWITCH_WAIT_SECONDS"
+
+    if refresh_target_address; then
+        new_ip="$CURRENT_ADDRESS"
+    else
+        new_ip="unknown"
+    fi
+
+    LAST_SWITCH_TS=$now
+    log "IP switch completed: $old_ip -> $new_ip"
+    send_telegram "IP switch completed
+Old IP: $old_ip
+New IP: $new_ip
+Port: $TARGET_PORT
+Time: $(date '+%Y-%m-%d %H:%M:%S')"
+    return 0
+}
+
+check_config() {
+    local errors=()
+    local error
+
+    [[ -z "${TARGET_PORT:-}" ]] && errors+=("TARGET_PORT is empty")
+    [[ -z "${CHECK_API_URL:-}" ]] && errors+=("CHECK_API_URL is empty")
+    [[ -z "${CHECK_API_URL_2:-}" ]] && errors+=("CHECK_API_URL_2 is empty")
+    [[ -z "${SWITCH_IP_URL:-}" ]] && errors+=("SWITCH_IP_URL is empty")
+    [[ "$CHECK_INTERVAL" =~ ^[0-9]+$ ]] || errors+=("CHECK_INTERVAL must be a number")
+    [[ "$MAX_FAILURES" =~ ^[0-9]+$ ]] || errors+=("MAX_FAILURES must be a number")
+    [[ "$SWITCH_WAIT_SECONDS" =~ ^[0-9]+$ ]] || errors+=("SWITCH_WAIT_SECONDS must be a number")
+    [[ "$SWITCH_COOLDOWN_SECONDS" =~ ^[0-9]+$ ]] || errors+=("SWITCH_COOLDOWN_SECONDS must be a number")
+
+    if ! refresh_target_address; then
+        errors+=("failed to determine target address")
+    fi
+
+    if (( ${#errors[@]} > 0 )); then
+        log "Configuration errors:"
+        for error in "${errors[@]}"; do
+            log "  - $error"
+        done
+        return 1
+    fi
+
+    return 0
+}
+
+check_dependencies() {
+    local missing=()
+    local cmd
+
+    for cmd in curl sed date tr mktemp cat rm; do
+        command -v "$cmd" >/dev/null 2>&1 || missing+=("$cmd")
+    done
+
+    if (( ${#missing[@]} > 0 )); then
+        log "Missing dependencies: ${missing[*]}"
+        log "Install example: apt-get update && apt-get install -y curl coreutils sed"
+        return 1
+    fi
+
+    return 0
+}
+
+cleanup() {
+    log "Stopping monitor"
+    send_telegram "CIP monitor stopped"
+    exit 0
+}
+
+main_loop() {
+    log "Monitoring ${CURRENT_ADDRESS}:${TARGET_PORT} via ${CHECK_API_URL} and ${CHECK_API_URL_2}"
+    send_telegram "CIP monitor started
+Target: ${CURRENT_ADDRESS}:${TARGET_PORT}
+Interval: ${CHECK_INTERVAL}s
+Failure threshold: ${MAX_FAILURES}"
+
+    while true; do
+        if check_port_by_api "$CURRENT_ADDRESS" "$TARGET_PORT"; then
+            if (( FAILURE_COUNT > 0 )); then
+                log "Port recovered: ${CURRENT_ADDRESS}:${TARGET_PORT}"
+                send_telegram "Port recovered
+Target: ${CURRENT_ADDRESS}:${TARGET_PORT}"
+            fi
+            FAILURE_COUNT=0
+        else
+            FAILURE_COUNT=$((FAILURE_COUNT + 1))
+            log "Port check failed (${FAILURE_COUNT}/${MAX_FAILURES})"
+
+            if (( FAILURE_COUNT >= MAX_FAILURES )); then
+                log "Failure threshold reached, triggering IP switch"
+                send_telegram "Port check failed repeatedly
+Target: ${CURRENT_ADDRESS}:${TARGET_PORT}
+Failures: ${FAILURE_COUNT}
+Action: switching IP"
+
+                switch_ip
+                FAILURE_COUNT=0
+            fi
+        fi
+
+        sleep "$CHECK_INTERVAL"
+    done
+}
+
+main() {
+    log "=== CIP monitor starting ==="
+
+    if ! check_dependencies; then
+        exit 1
+    fi
+
+    if ! check_config; then
+        exit 1
+    fi
+
+    trap cleanup SIGINT SIGTERM
+
+    log "Target address: $CURRENT_ADDRESS"
+    log "Target port: $TARGET_PORT"
+    log "Check interval: ${CHECK_INTERVAL}s"
+    log "Failure threshold: $MAX_FAILURES"
+    log "Switch cooldown: ${SWITCH_COOLDOWN_SECONDS}s"
+
+    main_loop
+}
+
+if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
+    main "$@"
+fi

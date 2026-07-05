@@ -1,0 +1,25 @@
+[Unit]
+Description=CIP API Port Monitor and IP Switch Service
+Documentation=CIP port check and IP switch monitor
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+Group=root
+WorkingDirectory=/root
+EnvironmentFile=-/etc/cip/cip.env
+ExecStart=/root/ssh_monitor.sh
+ExecReload=/bin/kill -HUP $MAINPID
+Restart=on-failure
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=cip
+Environment=PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+NoNewPrivileges=false
+PrivateTmp=false
+
+[Install]
+WantedBy=multi-user.target

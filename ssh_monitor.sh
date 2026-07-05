@@ -270,8 +270,6 @@ check_config() {
         for error in "${errors[@]}"; do
             log "  - $error"
         done
-        notify_status "启动失败" "原因：配置错误
-详情：${errors[*]}"
         return 1
     fi
 
@@ -297,7 +295,6 @@ check_dependencies() {
 
 cleanup() {
     log "Stopping monitor"
-    notify_status "监控服务已停止"
     exit 0
 }
 
@@ -310,10 +307,6 @@ main_loop() {
         if check_port_by_api "$CURRENT_ADDRESS" "$TARGET_PORT"; then
             if (( FAILURE_COUNT > 0 )); then
                 log "Port recovered: ${CURRENT_ADDRESS}:${TARGET_PORT}"
-                send_telegram "状态：端口已恢复
-设备：$(device_label)
-目标：${CURRENT_ADDRESS}:${TARGET_PORT}
-时间：$(date '+%Y-%m-%d %H:%M:%S')"
             fi
             FAILURE_COUNT=0
         else
@@ -340,10 +333,8 @@ main_loop() {
 
 main() {
     log "=== CIP monitor starting ==="
-    notify_status "监控服务正在启动"
 
     if ! check_dependencies; then
-        notify_status "启动失败" "原因：缺少依赖"
         exit 2
     fi
 

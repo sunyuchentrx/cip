@@ -27,11 +27,14 @@ nano /etc/cip/cip.env
 
 Set your own values for:
 
+- `DEVICE_NAME`
 - `TARGET_PORT`
 - `CHECK_API_URL`
 - `CHECK_API_URL_2`
 - `SWITCH_IP_URL`
 - `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID` if Telegram notifications are needed
+
+`DEVICE_NAME` is shown in Telegram messages, for example `CIP Monitor - hk-server-01`, so multiple servers are easy to identify.
 
 Real API URLs, switch URLs, tokens, and chat IDs should only live in `/etc/cip/cip.env` on your server. Do not commit them to GitHub.
 

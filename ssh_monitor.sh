@@ -7,6 +7,7 @@ set -u
 # check fails several times in a row, it calls the configured IP switch URL.
 
 SCRIPT_NAME="${SCRIPT_NAME:-CIP Monitor}"
+DEVICE_NAME="${DEVICE_NAME:-}"
 CONFIG_FILE="${CONFIG_FILE:-/etc/cip/cip.env}"
 
 # Main settings. These can be overridden by /etc/cip/cip.env or environment.
@@ -38,6 +39,11 @@ log() {
 
 send_telegram() {
     local message="$1"
+    local title="$SCRIPT_NAME"
+
+    if [[ -n "${DEVICE_NAME:-}" ]]; then
+        title="${SCRIPT_NAME} - ${DEVICE_NAME}"
+    fi
 
     if [[ -z "${TELEGRAM_BOT_TOKEN:-}" || -z "${TELEGRAM_CHAT_ID:-}" ]]; then
         log "[TG] $message"
@@ -49,7 +55,7 @@ send_telegram() {
 
     response=$(curl -sS --max-time 15 -X POST "$url" \
         --data-urlencode "chat_id=${TELEGRAM_CHAT_ID}" \
-        --data-urlencode "text=${SCRIPT_NAME}
+        --data-urlencode "text=${title}
 ${message}" \
         -d "disable_web_page_preview=true" 2>&1)
 

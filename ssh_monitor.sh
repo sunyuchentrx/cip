@@ -56,13 +56,22 @@ send_telegram() {
     response=$(curl -sS --max-time 15 -X POST "$url" \
         --data-urlencode "chat_id=${TELEGRAM_CHAT_ID}" \
         --data-urlencode "text=${title}
+------------------------------
 ${message}" \
         -d "disable_web_page_preview=true" 2>&1)
 
     if [[ $? -eq 0 ]]; then
-        log "[TG] sent: $message"
+        log "[TG] sent"
     else
         log "[TG] send failed: $response"
+    fi
+}
+
+device_label() {
+    if [[ -n "${DEVICE_NAME:-}" ]]; then
+        printf '%s\n' "$DEVICE_NAME"
+    else
+        printf '未设置\n'
     fi
 }
 
@@ -189,9 +198,11 @@ switch_ip() {
     result=$(curl -fsS --connect-timeout 8 --max-time 20 "$SWITCH_IP_URL" 2>&1)
     if [[ $? -ne 0 ]]; then
         log "IP switch request failed: $result"
-        send_telegram "IP switch failed
-Current IP: $old_ip
-Reason: request failed"
+        send_telegram "状态：换 IP 失败
+设备：$(device_label)
+当前 IP：$old_ip
+原因：接口请求失败
+时间：$(date '+%Y-%m-%d %H:%M:%S')"
         LAST_SWITCH_TS=$now
         return 1
     fi
@@ -207,11 +218,12 @@ Reason: request failed"
 
     LAST_SWITCH_TS=$now
     log "IP switch completed: $old_ip -> $new_ip"
-    send_telegram "IP switch completed
-Old IP: $old_ip
-New IP: $new_ip
-Port: $TARGET_PORT
-Time: $(date '+%Y-%m-%d %H:%M:%S')"
+    send_telegram "状态：换 IP 完成
+设备：$(device_label)
+旧 IP：$old_ip
+新 IP：$new_ip
+端口：$TARGET_PORT
+时间：$(date '+%Y-%m-%d %H:%M:%S')"
     return 0
 }
 
@@ -262,23 +274,30 @@ check_dependencies() {
 
 cleanup() {
     log "Stopping monitor"
-    send_telegram "CIP monitor stopped"
+    send_telegram "状态：监控服务已停止
+设备：$(device_label)
+目标：${CURRENT_ADDRESS:-unknown}:${TARGET_PORT:-unknown}
+时间：$(date '+%Y-%m-%d %H:%M:%S')"
     exit 0
 }
 
 main_loop() {
     log "Monitoring ${CURRENT_ADDRESS}:${TARGET_PORT} via ${CHECK_API_URL} and ${CHECK_API_URL_2}"
-    send_telegram "CIP monitor started
-Target: ${CURRENT_ADDRESS}:${TARGET_PORT}
-Interval: ${CHECK_INTERVAL}s
-Failure threshold: ${MAX_FAILURES}"
+    send_telegram "状态：监控服务已启动
+设备：$(device_label)
+目标：${CURRENT_ADDRESS}:${TARGET_PORT}
+检测间隔：${CHECK_INTERVAL} 秒
+失败阈值：${MAX_FAILURES} 次
+时间：$(date '+%Y-%m-%d %H:%M:%S')"
 
     while true; do
         if check_port_by_api "$CURRENT_ADDRESS" "$TARGET_PORT"; then
             if (( FAILURE_COUNT > 0 )); then
                 log "Port recovered: ${CURRENT_ADDRESS}:${TARGET_PORT}"
-                send_telegram "Port recovered
-Target: ${CURRENT_ADDRESS}:${TARGET_PORT}"
+                send_telegram "状态：端口已恢复
+设备：$(device_label)
+目标：${CURRENT_ADDRESS}:${TARGET_PORT}
+时间：$(date '+%Y-%m-%d %H:%M:%S')"
             fi
             FAILURE_COUNT=0
         else
@@ -287,10 +306,12 @@ Target: ${CURRENT_ADDRESS}:${TARGET_PORT}"
 
             if (( FAILURE_COUNT >= MAX_FAILURES )); then
                 log "Failure threshold reached, triggering IP switch"
-                send_telegram "Port check failed repeatedly
-Target: ${CURRENT_ADDRESS}:${TARGET_PORT}
-Failures: ${FAILURE_COUNT}
-Action: switching IP"
+                send_telegram "状态：连续检测失败
+设备：$(device_label)
+目标：${CURRENT_ADDRESS}:${TARGET_PORT}
+失败次数：${FAILURE_COUNT}/${MAX_FAILURES}
+处理动作：准备换 IP
+时间：$(date '+%Y-%m-%d %H:%M:%S')"
 
                 switch_ip
                 FAILURE_COUNT=0

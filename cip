@@ -6,6 +6,7 @@ SERVICE_NAME="${SERVICE_NAME:-cip}"
 SERVICE_FILE="${SERVICE_FILE:-/etc/systemd/system/cip.service}"
 SCRIPT_PATH="${SCRIPT_PATH:-/root/ssh_monitor.sh}"
 CONFIG_FILE="${CONFIG_FILE:-/etc/cip/cip.env}"
+UPDATE_CMD="${UPDATE_CMD:-/usr/local/bin/cip-update}"
 
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -19,93 +20,94 @@ log() {
 }
 
 pause() {
-    printf '%b' "${YELLOW}Press any key to return to menu...${NC}"
+    printf '%b' "${YELLOW}按任意键返回菜单...${NC}"
     read -r -n 1
     printf '\n'
 }
 
 require_root() {
     if [[ ${EUID:-$(id -u)} -ne 0 ]]; then
-        printf '%b\n' "${RED}Error: run as root, for example: sudo $0${NC}"
+        printf '%b\n' "${RED}错误：请使用 root 权限运行，例如 sudo $0${NC}"
         exit 1
     fi
 }
 
 service_active_text() {
     if systemctl is-active --quiet "$SERVICE_NAME"; then
-        printf '%b' "${GREEN}running${NC}"
+        printf '%b' "${GREEN}运行中${NC}"
     else
-        printf '%b' "${RED}stopped${NC}"
+        printf '%b' "${RED}已停止${NC}"
     fi
 }
 
 service_enabled_text() {
     if systemctl is-enabled --quiet "$SERVICE_NAME" 2>/dev/null; then
-        printf '%b' "${GREEN}enabled${NC}"
+        printf '%b' "${GREEN}已启用${NC}"
     else
-        printf '%b' "${YELLOW}disabled${NC}"
+        printf '%b' "${YELLOW}未启用${NC}"
     fi
 }
 
 show_header() {
     clear
     printf '%b\n' "${CYAN}================================================${NC}"
-    printf '%b\n' "${CYAN}              CIP Service Manager${NC}"
+    printf '%b\n' "${CYAN}              CIP 服务管理器${NC}"
     printf '%b\n' "${CYAN}================================================${NC}"
     printf '\n'
 }
 
 show_status() {
-    printf '%b\n' "${BLUE}Service status${NC}"
-    printf '  Service: %s\n' "$SERVICE_NAME"
-    printf '  Active: '
+    printf '%b\n' "${BLUE}服务状态${NC}"
+    printf '  服务名称：%s\n' "$SERVICE_NAME"
+    printf '  当前状态：'
     service_active_text
     printf '\n'
-    printf '  Boot: '
+    printf '  开机启动：'
     service_enabled_text
     printf '\n'
-    printf '  Script: %s\n' "$SCRIPT_PATH"
-    printf '  Service file: %s\n' "$SERVICE_FILE"
-    printf '  Config file: %s\n' "$CONFIG_FILE"
+    printf '  监控脚本：%s\n' "$SCRIPT_PATH"
+    printf '  服务文件：%s\n' "$SERVICE_FILE"
+    printf '  配置文件：%s\n' "$CONFIG_FILE"
     printf '\n'
 }
 
 show_menu() {
     show_header
     show_status
-    printf '%b\n' "${YELLOW}Choose an action:${NC}"
-    printf '  %b1)%b Start service\n' "$GREEN" "$NC"
-    printf '  %b2)%b Stop service\n' "$GREEN" "$NC"
-    printf '  %b3)%b Restart service\n' "$GREEN" "$NC"
-    printf '  %b4)%b Show detailed status\n' "$GREEN" "$NC"
-    printf '  %b5)%b Show logs\n' "$GREEN" "$NC"
-    printf '  %b6)%b Enable boot start\n' "$GREEN" "$NC"
-    printf '  %b7)%b Disable boot start\n' "$GREEN" "$NC"
-    printf '  %b8)%b Reload systemd\n' "$GREEN" "$NC"
-    printf '  %b9)%b Show config\n' "$GREEN" "$NC"
-    printf '  %b0)%b Exit\n' "$GREEN" "$NC"
-    printf '\n%bChoose [0-9]: %b' "$CYAN" "$NC"
+    printf '%b\n' "${YELLOW}请选择操作：${NC}"
+    printf '  %b1)%b 启动服务\n' "$GREEN" "$NC"
+    printf '  %b2)%b 停止服务\n' "$GREEN" "$NC"
+    printf '  %b3)%b 重启服务\n' "$GREEN" "$NC"
+    printf '  %b4)%b 查看详细状态\n' "$GREEN" "$NC"
+    printf '  %b5)%b 查看日志\n' "$GREEN" "$NC"
+    printf '  %b6)%b 设置开机启动\n' "$GREEN" "$NC"
+    printf '  %b7)%b 取消开机启动\n' "$GREEN" "$NC"
+    printf '  %b8)%b 重载 systemd\n' "$GREEN" "$NC"
+    printf '  %b9)%b 查看配置\n' "$GREEN" "$NC"
+    printf '  %bu)%b 一键更新\n' "$GREEN" "$NC"
+    printf '  %b0)%b 退出\n' "$GREEN" "$NC"
+    printf '\n%b请输入 [0-9/u]：%b' "$CYAN" "$NC"
 }
 
 run_systemctl() {
     local action="$1"
-    log "${BLUE}Running: systemctl ${action} ${SERVICE_NAME}${NC}"
+    log "${BLUE}执行：systemctl ${action} ${SERVICE_NAME}${NC}"
 
     if systemctl "$action" "$SERVICE_NAME"; then
-        log "${GREEN}Success${NC}"
+        log "${GREEN}操作成功${NC}"
     else
-        log "${RED}Failed${NC}"
+        log "${RED}操作失败${NC}"
     fi
 
     sleep 1
 }
 
 reload_systemd() {
-    log "${BLUE}Running: systemctl daemon-reload${NC}"
+    log "${BLUE}执行：systemctl daemon-reload${NC}"
     if systemctl daemon-reload; then
-        log "${GREEN}Reloaded${NC}"
+        log "${GREEN}重载完成${NC}"
     else
-        log "${RED}Reload failed${NC}"
+        log "${RED}重载失败${NC}"
     fi
     sleep 1
 }
@@ -124,9 +126,21 @@ show_config() {
     if [[ -f "$CONFIG_FILE" ]]; then
         sed -E 's/(PASSWORD|TOKEN|CHAT_ID|URL)=.*/\1=***/' "$CONFIG_FILE"
     else
-        printf 'Config file does not exist: %s\n' "$CONFIG_FILE"
-        printf 'The monitor will use defaults from %s\n' "$SCRIPT_PATH"
+        printf '配置文件不存在：%s\n' "$CONFIG_FILE"
+        printf '监控脚本将使用默认值：%s\n' "$SCRIPT_PATH"
     fi
+    pause
+}
+
+run_update() {
+    if [[ ! -x "$UPDATE_CMD" ]]; then
+        printf '更新脚本不存在：%s\n' "$UPDATE_CMD"
+        printf '可手动执行：bash -c "$(curl -fsSL https://raw.githubusercontent.com/sunyuchentrx/cip/main/update.sh)"\n'
+        pause
+        return
+    fi
+
+    "$UPDATE_CMD"
     pause
 }
 
@@ -147,9 +161,10 @@ main() {
             7) run_systemctl disable ;;
             8) reload_systemd ;;
             9) show_config ;;
+            u|U) run_update ;;
             0) exit 0 ;;
             *)
-                log "${RED}Invalid choice${NC}"
+                log "${RED}无效选择${NC}"
                 sleep 1
                 ;;
         esac

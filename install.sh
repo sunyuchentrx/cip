@@ -11,6 +11,7 @@ INSTALL_DIR="${INSTALL_DIR:-/root}"
 BIN_DIR="${BIN_DIR:-/usr/local/bin}"
 CONFIG_DIR="${CONFIG_DIR:-/etc/cip}"
 SERVICE_FILE="${SERVICE_FILE:-/etc/systemd/system/${SERVICE_NAME}.service}"
+TMP_DIR=""
 
 log() {
     printf '[%s] %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$*"
@@ -47,27 +48,32 @@ download() {
     curl -fsSL "${RAW_BASE}/${name}" -o "$destination"
 }
 
+cleanup() {
+    if [[ -n "${TMP_DIR:-}" && -d "$TMP_DIR" ]]; then
+        rm -rf "$TMP_DIR"
+    fi
+}
+
 main() {
     require_root
     require_command
 
-    local tmp_dir
-    tmp_dir=$(mktemp -d)
-    trap 'rm -rf "$tmp_dir"' EXIT
+    TMP_DIR=$(mktemp -d)
+    trap cleanup EXIT
 
-    download "ssh_monitor.sh" "${tmp_dir}/ssh_monitor.sh"
-    download "cip" "${tmp_dir}/cip"
-    download "cip.service" "${tmp_dir}/cip.service"
-    download "cip.env.example" "${tmp_dir}/cip.env.example"
+    download "ssh_monitor.sh" "${TMP_DIR}/ssh_monitor.sh"
+    download "cip" "${TMP_DIR}/cip"
+    download "cip.service" "${TMP_DIR}/cip.service"
+    download "cip.env.example" "${TMP_DIR}/cip.env.example"
 
     log "Installing files"
     install -d "$INSTALL_DIR" "$BIN_DIR" "$CONFIG_DIR"
-    install -m 0755 "${tmp_dir}/ssh_monitor.sh" "${INSTALL_DIR}/ssh_monitor.sh"
-    install -m 0755 "${tmp_dir}/cip" "${BIN_DIR}/cip"
-    install -m 0644 "${tmp_dir}/cip.service" "$SERVICE_FILE"
+    install -m 0755 "${TMP_DIR}/ssh_monitor.sh" "${INSTALL_DIR}/ssh_monitor.sh"
+    install -m 0755 "${TMP_DIR}/cip" "${BIN_DIR}/cip"
+    install -m 0644 "${TMP_DIR}/cip.service" "$SERVICE_FILE"
 
     if [[ ! -f "${CONFIG_DIR}/cip.env" ]]; then
-        install -m 0600 "${tmp_dir}/cip.env.example" "${CONFIG_DIR}/cip.env"
+        install -m 0600 "${TMP_DIR}/cip.env.example" "${CONFIG_DIR}/cip.env"
         log "Created config: ${CONFIG_DIR}/cip.env"
     else
         log "Keeping existing config: ${CONFIG_DIR}/cip.env"

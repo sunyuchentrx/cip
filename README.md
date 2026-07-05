@@ -44,7 +44,7 @@ nano /etc/cip/cip.env
 
 需要修改的主要配置：
 
-- `DEVICE_NAME`：设备名称，TG 推送里会显示，用来区分多台机器
+- `SCRIPT_NAME`：TG 推送标题，建议每台机器设置不同名称
 - `TARGET_PORT`：要检测的端口
 - `CHECK_API_URL`：检测 API 1
 - `CHECK_API_URL_2`：检测 API 2

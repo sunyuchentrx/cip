@@ -7,7 +7,6 @@ set -u
 # check fails several times in a row, it calls the configured IP switch URL.
 
 SCRIPT_NAME="${SCRIPT_NAME:-CIP Monitor}"
-DEVICE_NAME="${DEVICE_NAME:-}"
 CONFIG_FILE="${CONFIG_FILE:-/etc/cip/cip.env}"
 
 # Main settings. These can be overridden by /etc/cip/cip.env or environment.
@@ -41,10 +40,6 @@ send_telegram() {
     local message="$1"
     local title="$SCRIPT_NAME"
 
-    if [[ -n "${DEVICE_NAME:-}" ]]; then
-        title="${SCRIPT_NAME} - ${DEVICE_NAME}"
-    fi
-
     if [[ -z "${TELEGRAM_BOT_TOKEN:-}" || -z "${TELEGRAM_CHAT_ID:-}" ]]; then
         log "[TG] $message"
         return 0
@@ -67,14 +62,6 @@ ${message}" \
     fi
 }
 
-device_label() {
-    if [[ -n "${DEVICE_NAME:-}" ]]; then
-        printf '%s\n' "$DEVICE_NAME"
-    else
-        printf '未设置\n'
-    fi
-}
-
 notify_status() {
     local status="$1"
     local extra="${2:-}"
@@ -82,7 +69,6 @@ notify_status() {
     local message
 
     message="状态：${status}
-设备：$(device_label)
 目标：${target}"
 
     if [[ -n "$extra" ]]; then
@@ -220,7 +206,6 @@ switch_ip() {
     if [[ $? -ne 0 ]]; then
         log "IP switch request failed: $result"
         send_telegram "状态：换 IP 失败
-设备：$(device_label)
 当前 IP：$old_ip
 原因：接口请求失败
 时间：$(date '+%Y-%m-%d %H:%M:%S')"
@@ -240,7 +225,6 @@ switch_ip() {
     LAST_SWITCH_TS=$now
     log "IP switch completed: $old_ip -> $new_ip"
     send_telegram "状态：换 IP 完成
-设备：$(device_label)
 旧 IP：$old_ip
 新 IP：$new_ip
 端口：$TARGET_PORT
@@ -316,7 +300,6 @@ main_loop() {
             if (( FAILURE_COUNT >= MAX_FAILURES )); then
                 log "Failure threshold reached, triggering IP switch"
                 send_telegram "状态：连续检测失败
-设备：$(device_label)
 目标：${CURRENT_ADDRESS}:${TARGET_PORT}
 失败次数：${FAILURE_COUNT}/${MAX_FAILURES}
 处理动作：准备换 IP

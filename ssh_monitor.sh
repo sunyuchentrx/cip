@@ -30,6 +30,8 @@ fi
 
 FAILURE_COUNT=0
 LAST_SWITCH_TS=0
+LAST_NOTIFIED_DOWN=0
+LAST_NOTIFIED_UP=0
 CURRENT_ADDRESS=""
 
 log() {
@@ -224,11 +226,6 @@ switch_ip() {
 
     LAST_SWITCH_TS=$now
     log "IP switch completed: $old_ip -> $new_ip"
-    send_telegram "状态：换 IP 完成
-旧 IP：$old_ip
-新 IP：$new_ip
-端口：$TARGET_PORT
-时间：$(date '+%Y-%m-%d %H:%M:%S')"
     return 0
 }
 
@@ -284,28 +281,57 @@ cleanup() {
 
 main_loop() {
     log "Monitoring ${CURRENT_ADDRESS}:${TARGET_PORT} via ${CHECK_API_URL} and ${CHECK_API_URL_2}"
-    notify_status "监控服务启动完成" "检测间隔：${CHECK_INTERVAL} 秒
-失败阈值：${MAX_FAILURES} 次"
 
     while true; do
         if check_port_by_api "$CURRENT_ADDRESS" "$TARGET_PORT"; then
             if (( FAILURE_COUNT > 0 )); then
                 log "Port recovered: ${CURRENT_ADDRESS}:${TARGET_PORT}"
             fi
+            if (( LAST_NOTIFIED_DOWN > 0 )); then
+                notify_status "🟢 连接已恢复" "连通状态：通
+正在持续监测中
+检测间隔：${CHECK_INTERVAL} 秒"
+                LAST_NOTIFIED_UP=1
+            elif (( LAST_NOTIFIED_UP == 0 )); then
+                notify_status "🟢 当前状态正常" "连通状态：通
+正在持续监测中
+检测间隔：${CHECK_INTERVAL} 秒
+失败阈值：${MAX_FAILURES} 次"
+                LAST_NOTIFIED_UP=1
+            fi
             FAILURE_COUNT=0
+            LAST_NOTIFIED_DOWN=0
         else
             FAILURE_COUNT=$((FAILURE_COUNT + 1))
             log "Port check failed (${FAILURE_COUNT}/${MAX_FAILURES})"
 
-            if (( FAILURE_COUNT >= MAX_FAILURES )); then
-                log "Failure threshold reached, triggering IP switch"
-                send_telegram "状态：连续检测失败
+            if (( LAST_NOTIFIED_DOWN == 0 )); then
+                send_telegram "状态：🔴 检测不通
 目标：${CURRENT_ADDRESS}:${TARGET_PORT}
 失败次数：${FAILURE_COUNT}/${MAX_FAILURES}
-处理动作：准备换 IP
+处理动作：继续复检，达到阈值后换 IP
 时间：$(date '+%Y-%m-%d %H:%M:%S')"
+                LAST_NOTIFIED_DOWN=1
+                LAST_NOTIFIED_UP=0
+            fi
 
-                switch_ip
+            if (( FAILURE_COUNT >= MAX_FAILURES )); then
+                log "Failure threshold reached, triggering IP switch"
+
+                if switch_ip && check_port_by_api "$CURRENT_ADDRESS" "$TARGET_PORT"; then
+                    notify_status "🟢 换 IP 后已恢复" "连通状态：通
+正在持续监测中
+检测间隔：${CHECK_INTERVAL} 秒"
+                    LAST_NOTIFIED_DOWN=0
+                    LAST_NOTIFIED_UP=1
+                else
+                    send_telegram "状态：🔴 换 IP 后仍不通
+目标：${CURRENT_ADDRESS}:${TARGET_PORT}
+处理动作：继续监测
+时间：$(date '+%Y-%m-%d %H:%M:%S')"
+                    LAST_NOTIFIED_DOWN=1
+                    LAST_NOTIFIED_UP=0
+                fi
                 FAILURE_COUNT=0
             fi
         fi
